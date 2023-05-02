@@ -10,9 +10,6 @@ CREATE TYPE aws_commons._s3_uri_1 AS (bucket TEXT, file_path TEXT, region TEXT);
 DROP TYPE IF EXISTS aws_commons._aws_credentials_1 CASCADE;
 CREATE TYPE aws_commons._aws_credentials_1 AS (access_key TEXT, secret_key TEXT, session_token TEXT);
 
-ALTER SYSTEM SET aws_s3.endpoint_url TO 'http://localstack:4566';
-ALTER SYSTEM SET aws_s3.access_key_id TO 'dummy';
-ALTER SYSTEM SET aws_s3.secret_access_key TO 'dummy';
 --
 -- Create a aws_commons._s3_uri_1 object that holds the bucket, key and region
 --
@@ -147,40 +144,6 @@ AS $$
             credentials['access_key'],
             credentials['secret_key'],
             credentials['session_token'],
-	        endpoint_url
-        ]
-    )[0]['num_rows']
-$$;
-
---
--- S3 function to import data from S3 into a table
---
-
-CREATE OR REPLACE FUNCTION aws_s3.table_import_from_s3(
-   table_name text,
-   column_list text,
-   options text,
-   s3_info aws_commons._s3_uri_1,
-   endpoint_url text default null
-) RETURNS INT
-LANGUAGE plpython3u
-AS $$
-
-    plan = plpy.prepare(
-        'SELECT aws_s3.table_import_from_s3($1, $2, $3, $4, $5, $6, $7, $8, $9) AS num_rows',
-        ['TEXT', 'TEXT', 'TEXT', 'TEXT', 'TEXT', 'TEXT', 'TEXT', 'TEXT', 'TEXT', 'TEXT']
-    )
-    return plan.execute(
-        [
-            table_name,
-            column_list,
-            options,
-            s3_info['bucket'],
-            s3_info['file_path'],
-            s3_info['region'],
-            '',
-            '',
-            '',
 	        endpoint_url
         ]
     )[0]['num_rows']
