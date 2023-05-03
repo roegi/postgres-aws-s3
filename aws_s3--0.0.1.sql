@@ -158,7 +158,7 @@ CREATE OR REPLACE FUNCTION aws_s3.table_import_from_s3(
    options text,
    s3_info aws_commons._s3_uri_1,
    endpoint_url text default null
-) RETURNS INT
+) RETURNS text
 LANGUAGE plpython3u
 AS $$
 
@@ -166,7 +166,7 @@ AS $$
         'SELECT aws_s3.table_import_from_s3($1, $2, $3, $4, $5, $6, $7, $8, $9) AS num_rows',
         ['TEXT', 'TEXT', 'TEXT', 'TEXT', 'TEXT', 'TEXT', 'TEXT', 'TEXT', 'TEXT', 'TEXT']
     )
-    return plan.execute(
+    return str(plan.execute(
         [
             table_name,
             column_list,
@@ -179,7 +179,7 @@ AS $$
             '',
 	        endpoint_url
         ]
-    )[0]['num_rows']
+    )[0]['num_rows']) + ' rows imported '
 $$;
 
 CREATE OR REPLACE FUNCTION aws_s3.query_export_to_s3(
