@@ -149,6 +149,40 @@ AS $$
     )[0]['num_rows']
 $$;
 
+--
+-- S3 function to import data from S3 into a table
+--
+
+CREATE OR REPLACE FUNCTION aws_s3.table_import_from_s3(
+   table_name text,
+   column_list text,
+   options text,
+   s3_info aws_commons._s3_uri_1,
+   endpoint_url text default null
+) RETURNS text
+LANGUAGE plpython3u
+AS $$
+
+    plan = plpy.prepare(
+        'SELECT aws_s3.table_import_from_s3($1, $2, $3, $4, $5, $6, $7, $8, $9) AS num_rows',
+        ['TEXT', 'TEXT', 'TEXT', 'TEXT', 'TEXT', 'TEXT', 'TEXT', 'TEXT', 'TEXT', 'TEXT']
+    )
+    return str(plan.execute(
+        [
+            table_name,
+            column_list,
+            options,
+            s3_info['bucket'],
+            s3_info['file_path'],
+            s3_info['region'],
+            '',
+            '',
+            '',
+	        endpoint_url
+        ]
+    )[0]['num_rows']) + ' rows imported '
+$$;
+
 CREATE OR REPLACE FUNCTION aws_s3.query_export_to_s3(
     query text,    
     bucket text,    
