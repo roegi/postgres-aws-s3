@@ -3,9 +3,13 @@
 
 CREATE SCHEMA IF NOT EXISTS aws_commons;
 CREATE SCHEMA IF NOT EXISTS aws_s3;
+CREATE SCHEMA IF NOT EXISTS aws_lambda;
 
 DROP TYPE IF EXISTS aws_commons._s3_uri_1 CASCADE;
 CREATE TYPE aws_commons._s3_uri_1 AS (bucket TEXT, file_path TEXT, region TEXT);
+
+DROP TYPE IF EXISTS aws_commons._lambda_function_arn_1 CASCADE;
+CREATE TYPE aws_commons._lambda_function_arn_1 AS (function_name TEXT, region TEXT, endpoint_url TEXT);
 
 DROP TYPE IF EXISTS aws_commons._aws_credentials_1 CASCADE;
 CREATE TYPE aws_commons._aws_credentials_1 AS (access_key TEXT, secret_key TEXT, session_token TEXT);
@@ -184,14 +188,14 @@ AS $$
 $$;
 
 CREATE OR REPLACE FUNCTION aws_s3.query_export_to_s3(
-    query text,    
-    bucket text,    
+    query text,
+    bucket text,
     file_path text,
     region text default null,
     access_key text default null,
     secret_key text default null,
     session_token text default null,
-    options text default null, 
+    options text default null,
     endpoint_url text default null,
     OUT rows_uploaded bigint,
     OUT files_uploaded bigint,
@@ -257,10 +261,10 @@ AS $$
 $$;
 
 CREATE OR REPLACE FUNCTION aws_s3.query_export_to_s3(
-    query text,    
+    query text,
     s3_info aws_commons._s3_uri_1,
     credentials aws_commons._aws_credentials_1 default null,
-    options text default null, 
+    options text default null,
     endpoint_url text default null,
     OUT rows_uploaded bigint,
     OUT files_uploaded bigint,
@@ -286,3 +290,79 @@ AS $$
         ]
     )
 $$;
+
+--
+-- Create a aws_commons._lambda_arn object that holds the lambda function's name, region and endpoint URL
+--
+
+CREATE OR REPLACE FUNCTION aws_commons.create_lambda_function_arn(functionNameOrArn TEXT, regionOrEndpoint TEXT DEFAULT NULL)
+    RETURNS aws_commons._lambda_function_arn_1 AS
+$BODY$
+    DECLARE lambda_arn aws_commons._lambda_function_arn_1;
+    BEGIN
+        IF regionOrEndpoint IS NULL THEN
+            lambda_arn := (split_part(functionNameOrArn, ':', -1), split_part(functionNameOrArn, ':', 4), NULL);
+        ELSE
+            IF starts_with(regionOrEndpoint, 'http') THEN
+                lambda_arn := (split_part(functionNameOrArn, ':', -1), 'eu-west-1', regionOrEndpoint);
+            ELSE
+                lambda_arn := (split_part(functionNameOrArn, ':', -1), regionOrEndpoint, NULL);
+            END IF;
+        END IF;
+        RETURN lambda_arn;
+    END
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+
+CREATE OR REPLACE FUNCTION aws_lambda._boto3_invoke(IN function_name aws_commons._lambda_function_arn_1,
+    IN payload TEXT, IN region TEXT DEFAULT NULL, IN invocation_type TEXT DEFAULT 'RequestResponse',
+    IN log_type TEXT DEFAULT 'None', IN context TEXT DEFAULT NULL,
+    IN qualifier VARCHAR(128) DEFAULT NULL, OUT status_code INT, OUT payload TEXT,
+    OUT executed_version TEXT, OUT log_result TEXT)
+    RETURNS RECORD
+LANGUAGE plpython3u
+AS $$
+    import boto3
+
+    client=boto3.client(
+        service_name='lambda',
+        region_name=function_name['region'],
+        endpoint_url=function_name['endpoint_url'],
+        aws_access_key_id='localstack',
+        aws_secret_access_key='localstack'
+    )
+
+    invokeArgs = {
+        "FunctionName": function_name['function_name'],
+        "InvocationType": invocation_type,
+        "LogType": log_type,
+        "Payload": payload.encode()
+    }
+    if context != None:
+        invokeArgs["ClientContext"] = context
+    if qualifier != None:
+        invokeArgs["Qualifier"] = qualifier
+
+    response=client.invoke(**invokeArgs)
+    responsePayload = response['Payload'].read()
+    if ( 'FunctionError' in response ):
+        raise Exception(responsePayload)
+    return (response['StatusCode'], responsePayload, response['ExecutedVersion'], response['LogResult'])
+$$;
+
+CREATE OR REPLACE FUNCTION aws_lambda.invoke(IN function_name aws_commons._lambda_function_arn_1,
+    IN req_payload JSON, IN region TEXT DEFAULT NULL, IN invocation_type TEXT DEFAULT 'RequestResponse',
+    IN log_type TEXT DEFAULT 'None', IN context JSON DEFAULT NULL,
+    IN qualifier VARCHAR(128) DEFAULT NULL, OUT status_code INT, OUT payload JSON,
+    OUT executed_version TEXT, OUT log_result TEXT)
+    RETURNS RECORD AS
+$BODY$
+    BEGIN
+        SELECT result.status_code, result.payload::JSON, result.executed_version, result.log_result
+        FROM aws_lambda._boto3_invoke(function_name, req_payload::TEXT,
+                                      region, invocation_type, log_type, context::TEXT,
+                                      qualifier) result
+        INTO status_code, payload, executed_version, log_result;
+    END
+$BODY$
+LANGUAGE plpgsql VOLATILE;
