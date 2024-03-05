@@ -9,7 +9,7 @@ DROP TYPE IF EXISTS aws_commons._s3_uri_1 CASCADE;
 CREATE TYPE aws_commons._s3_uri_1 AS (bucket TEXT, file_path TEXT, region TEXT);
 
 DROP TYPE IF EXISTS aws_commons._lambda_function_arn_1 CASCADE;
-CREATE TYPE aws_commons._lambda_function_arn_1 AS (function_name TEXT, region TEXT, endpoint_url TEXT);
+CREATE TYPE aws_commons._lambda_function_arn_1 AS (function_name TEXT, region TEXT);
 
 DROP TYPE IF EXISTS aws_commons._aws_credentials_1 CASCADE;
 CREATE TYPE aws_commons._aws_credentials_1 AS (access_key TEXT, secret_key TEXT, session_token TEXT);
@@ -295,20 +295,12 @@ $$;
 -- Create a aws_commons._lambda_arn object that holds the lambda function's name, region and endpoint URL
 --
 
-CREATE OR REPLACE FUNCTION aws_commons.create_lambda_function_arn(functionNameOrArn TEXT, regionOrEndpoint TEXT DEFAULT NULL)
+CREATE OR REPLACE FUNCTION aws_commons.create_lambda_function_arn(functionName TEXT, region TEXT DEFAULT NULL)
     RETURNS aws_commons._lambda_function_arn_1 AS
 $BODY$
     DECLARE lambda_arn aws_commons._lambda_function_arn_1;
     BEGIN
-        IF regionOrEndpoint IS NULL THEN
-            lambda_arn := (split_part(functionNameOrArn, ':', -1), split_part(functionNameOrArn, ':', 4), NULL);
-        ELSE
-            IF starts_with(regionOrEndpoint, 'http') THEN
-                lambda_arn := (split_part(functionNameOrArn, ':', -1), 'eu-west-1', regionOrEndpoint);
-            ELSE
-                lambda_arn := (split_part(functionNameOrArn, ':', -1), regionOrEndpoint, NULL);
-            END IF;
-        END IF;
+        lambda_arn := (functionName, region);
         RETURN lambda_arn;
     END
 $BODY$
@@ -324,10 +316,15 @@ LANGUAGE plpython3u
 AS $$
     import boto3
 
+    settings = plpy.execute("""SELECT
+    coalesce(current_setting('aws_commons.connect_timeout_ms', true), '1000')::INTEGER AS connect_timeout_ms,
+    coalesce(current_setting('aws_commons.request_timeout_ms', true), '3000')::INTEGER AS request_timeout_ms,
+    coalesce(current_setting('aws_commons.endpoint_override', true), 'http://localstack:4566') AS endpoint_override""")[0]
+
     client=boto3.client(
         service_name='lambda',
         region_name=function_name['region'],
-        endpoint_url=function_name['endpoint_url'],
+        endpoint_url=settings['endpoint_override'],
         aws_access_key_id='localstack',
         aws_secret_access_key='localstack'
     )
@@ -360,8 +357,8 @@ $BODY$
     BEGIN
         SELECT result.status_code, result.payload::JSON, result.executed_version, result.log_result
         FROM aws_lambda._boto3_invoke(function_name, req_payload::TEXT,
-                                      region, invocation_type, log_type, context::TEXT,
-                                      qualifier) result
+                                      region, invocation_type, log_type,
+                                      context::TEXT, qualifier) result
         INTO status_code, payload, executed_version, log_result;
     END
 $BODY$
